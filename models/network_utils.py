@@ -10,6 +10,7 @@ from pytorch_lightning.utilities.rank_zero import rank_zero_debug, rank_zero_inf
 from utils.misc import config_to_primitive, get_rank
 from models.utils import get_activation
 from systems.utils import update_module_step
+from spectraltools.core import spectral_linear
 
 class VanillaFrequency(nn.Module):
     def __init__(self, in_channels, config):
@@ -174,8 +175,13 @@ def sphere_init_tcnn_network(n_input_dims, n_output_dims, config, network):
 
 
 def get_mlp(n_input_dims, n_output_dims, config):
-    if config.otype == 'VanillaMLP':
+    if config.otype == "SpectralMLP":
         network = VanillaMLP(n_input_dims, n_output_dims, config_to_primitive(config))
+        network = spectral_linear(network)
+        print(network)
+    elif config.otype == 'VanillaMLP':
+        network = VanillaMLP(n_input_dims, n_output_dims, config_to_primitive(config))
+
     else:
         with torch.cuda.device(get_rank()):
             network = tcnn.Network(n_input_dims, n_output_dims, config_to_primitive(config))

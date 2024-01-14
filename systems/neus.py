@@ -13,6 +13,8 @@ import systems
 from systems.base import BaseSystem
 from systems.criterions import PSNR, binary_cross_entropy
 
+from spectraltools.core import prune_percentile
+
 
 @systems.register('neus-system')
 class NeuSSystem(BaseSystem):
@@ -182,6 +184,9 @@ class NeuSSystem(BaseSystem):
             {'type': 'grayscale', 'img': out['depth'].view(H, W), 'kwargs': {}},
             {'type': 'rgb', 'img': out['comp_normal'].view(H, W, 3), 'kwargs': {'data_format': 'HWC', 'data_range': (-1, 1)}}
         ])
+
+        self.export()
+
         return {
             'psnr': psnr,
             'index': batch['index']
@@ -256,6 +261,49 @@ class NeuSSystem(BaseSystem):
             )
             
             self.export()
+
+            self.prune()
+
+    
+    def prune(self):
+    	# extract the weights from the model
+		eigenvalues_before = self.model.hidden1[1]
+		print(f"Eigenvalues before layer 1: {eigenvalues_before.eigvals.detach().numpy()}", )
+
+		# Prune the model
+		prune_percentile(self.model, 0.5)
+		eigenvalues_after = model.hidden1[1]
+		print(f"Eigenvalues after layer 1: {eigenvalues_after.eigvals.detach().numpy()}", )
+
+		# Check the percentage of eigenvalues that have been set to 0 in the whole model
+		zeros = 0
+		total = 0
+		for name, module in model.named_modules():
+		    if isinstance(module, Spectral):
+		        zeros += torch.sum(module.eigvals == 0)
+		        total += module.eigvals.nelement()
+		print(f"Percentage of eigenvalues pruned: {zeros / total * 100}%") 
+
+		print("Saving Post-Pruning") 
+		self.save_hyperparameters()
+
+		out = self(batch)
+        psnr = self.criterions['psnr'](out['comp_rgb_full'].to(batch['rgb']), batch['rgb'])
+        W, H = self.dataset.img_wh
+        self.save_image_grid(f"it{self.global_step}-test/{batch['index'][0].item()}_prune.png", [
+            {'type': 'rgb', 'img': batch['rgb'].view(H, W, 3), 'kwargs': {'data_format': 'HWC'}},
+            {'type': 'rgb', 'img': out['comp_rgb_full'].view(H, W, 3), 'kwargs': {'data_format': 'HWC'}}
+        ] + ([
+            {'type': 'rgb', 'img': out['comp_rgb_bg'].view(H, W, 3), 'kwargs': {'data_format': 'HWC'}},
+            {'type': 'rgb', 'img': out['comp_rgb'].view(H, W, 3), 'kwargs': {'data_format': 'HWC'}},
+        ] if self.config.model.learned_background else []) + [
+            {'type': 'grayscale', 'img': out['depth'].view(H, W), 'kwargs': {}},
+            {'type': 'rgb', 'img': out['comp_normal'].view(H, W, 3), 'kwargs': {'data_format': 'HWC', 'data_range': (-1, 1)}}
+        ])
+
+
+
+
     
     def export(self):
         mesh = self.model.export(self.config.export)

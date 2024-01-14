@@ -1,5 +1,5 @@
 import torch.nn.utils.prune as prune
-from spectraldense import Spectral
+from .spectraldense import Spectral
 
 def prune_percentile(model, percentile):
     # Handle percentile values also from 0 to 100

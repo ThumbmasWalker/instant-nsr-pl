@@ -177,7 +177,7 @@ def sphere_init_tcnn_network(n_input_dims, n_output_dims, config, network):
 def get_mlp(n_input_dims, n_output_dims, config):
     if config.otype == "SpectralMLP":
         network = VanillaMLP(n_input_dims, n_output_dims, config_to_primitive(config))
-        network = spectral_linear(network)
+        spectral_linear(network)
         print(network)
     elif config.otype == 'VanillaMLP':
         network = VanillaMLP(n_input_dims, n_output_dims, config_to_primitive(config))

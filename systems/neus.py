@@ -263,13 +263,18 @@ class NeuSSystem(BaseSystem):
             
             self.export()
 
-    def prune(self, percentile):
+
+
+
+    
+    
+    def prune(self):
     	  # extract the weights from the model
        # eigenvalues_before = self.model.hidden1[1]
         #print(f"Eigenvalues before layer 1: {eigenvalues_before.eigvals.detach().numpy()}", )
 
         ## Prune the model
-        prune_percentile(self.model, percentile)
+        prune_percentile(self.model, 0.5)
         #eigenvalues_after = model.hidden1[1]
         #print(f"Eigenvalues after layer 1: {eigenvalues_after.eigvals.detach().numpy()}", )
 
@@ -278,14 +283,12 @@ class NeuSSystem(BaseSystem):
         total = 0
         for name, module in self.model.named_modules():
           if isinstance(module, Spectral):
-            print(module.eigvals.shape)
             zeros += torch.sum(module.eigvals == 0)
             total += module.eigvals.nelement()
         print(f"Percentage of eigenvalues pruned: {zeros / total * 100}%") 
 
-        
         #print("Saving Post-Pruning") 
-        
+        #self.save_hyperparameters()
 
 
 

@@ -21,12 +21,15 @@ def spectral_linear(model,old_layer=Linear, new_layer=Spectral, verbose=True):
           if isinstance(module, old_layer):
             # Get current bn layer
             ol = get_layer(model, name)
-            # Create new gn layer
-            nl = Sequential(ol, new_layer(ol.out_features))
-            # Assign gn
-            if verbose:
-              print("Swapping {} with {}".format(ol, nl))
-            set_layer(model, name, nl)
+            if ol.out_features == 13:
+              print("here")
+            else:
+              # Crate new gn layer
+              nl = Sequential(ol, new_layer(ol.out_features))
+              # Assign gn
+              if verbose:
+                print("Swapping {} with {}".format(ol, nl))
+              set_layer(model, name, nl)
 
 
 def spectral_conv2d(model, old_layer=Conv2d, new_layer=Spectral, verbose=False):

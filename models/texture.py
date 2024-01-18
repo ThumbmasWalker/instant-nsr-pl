@@ -22,6 +22,30 @@ class VolumeRadiance(nn.Module):
     
     def forward(self, features, dirs, *args):
         dirs = (dirs + 1.) / 2. # (-1, 1) => (0, 1)
+
+        '''
+		xyz = features[int:int]
+
+		dirs_embd = get_encoding_nets(xyz, dirs)
+
+		def get_encoding_nets(self, xyz, dirs):
+
+			encoding_dict = { xyz_1: tcnn.Encoding, xyz_2:tcnn.Encoding, ...}
+
+			for key, val in encoding_dict:
+
+				find nets, xyzs and interpolation coefficients 
+
+				How to do this efficiently like in SHE?
+		
+			feats = nets(dirs)
+			
+			interpolated_feat = interpolation_coeffs*nets
+
+		
+		
+		'''
+
         dirs_embd = self.encoding(dirs.view(-1, self.n_dir_dims))
         network_inp = torch.cat([features.view(-1, features.shape[-1]), dirs_embd] + [arg.view(-1, arg.shape[-1]) for arg in args], dim=-1)
         color = self.network(network_inp).view(*features.shape[:-1], self.n_output_dims).float()
@@ -34,6 +58,8 @@ class VolumeRadiance(nn.Module):
 
     def regularizations(self, out):
         return {}
+
+
 
 
 @models.register('volume-color')

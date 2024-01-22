@@ -8,7 +8,7 @@ import tinycudann as tcnn
 from pytorch_lightning.utilities.rank_zero import rank_zero_debug, rank_zero_info
 
 from utils.misc import config_to_primitive, get_rank
-from models.utils import get_activation
+from models.utils import get_activation, get_voxel_vertices
 from systems.utils import update_module_step
 from spectraltools.core import spectral_linear
 
@@ -79,6 +79,101 @@ class CompositeEncoding(nn.Module):
     def update_step(self, epoch, global_step):
         update_module_step(self.encoding, epoch, global_step)
 
+class Experimental(nn.Module):
+    def __init__(self, in_channels, config):
+        super().__init__()
+        self.n_input_dims = in_channels
+        encoding_config = config.copy()
+        encoding_config['otype'] = 'HashGrid'
+        with torch.cuda.device(get_rank()):
+            self.encoding = HashEmbedder(encoding_config)
+        self.n_output_dims = self.encoding.out_dim
+        self.n_level = config['n_levels']
+        self.n_features_per_level = config['n_features_per_level']
+        self.start_level, self.start_step, self.update_steps = config['start_level'], config['start_step'], config['update_steps']
+        self.current_level = self.start_level
+        self.mask = torch.zeros(self.n_level * self.n_features_per_level, dtype=torch.float32, device=get_rank())
+
+    def forward(self, x):
+        enc, mask = self.encoding(x)
+        #print(enc.shape)
+        enc = enc * self.mask
+        return enc
+
+    def update_step(self, epoch, global_step):
+        current_level = min(self.start_level + max(global_step - self.start_step, 0) // self.update_steps, self.n_level)
+        if current_level > self.current_level:
+            rank_zero_info(f'Update grid level to {current_level}')
+        self.current_level = current_level
+        self.mask[:self.current_level * self.n_features_per_level] = 1.
+
+class HashEmbedder(nn.Module):
+    def __init__(self, config):
+        super(HashEmbedder, self).__init__()
+        encoding_config = config.copy()
+        self.bounding_box = torch.tensor(encoding_config['bounding_box'], device=get_rank())
+        self.n_levels = encoding_config['n_levels']
+        self.n_features_per_level = encoding_config['n_features_per_level']
+        self.log2_hashmap_size = encoding_config['log2_hashmap_size']
+        self.base_resolution = torch.tensor(encoding_config['base_resolution'], device=get_rank())
+        self.finest_resolution = torch.tensor(encoding_config['finest_resolution'], device=get_rank())
+        self.out_dim = self.n_levels * self.n_features_per_level
+
+        self.b = torch.exp((torch.log(self.finest_resolution)-torch.log(self.base_resolution))/(self.n_levels-1))
+        encoding_config['per_level_scale'] = self.b
+
+        self.embeddings = nn.ModuleList([nn.Embedding(2**self.log2_hashmap_size, \
+                                        self.n_features_per_level) for i in range(self.n_levels)])
+        # custom uniform initialization
+        for i in range(self.n_levels):
+            nn.init.uniform_(self.embeddings[i].weight, a=-0.0001, b=0.0001)
+            # self.embeddings[i].weight.data.zero_()
+        
+
+    def trilinear_interp(self, x, voxel_min_vertex, voxel_max_vertex, voxel_embedds):
+        '''
+        x: B x 3
+        voxel_min_vertex: B x 3
+        voxel_max_vertex: B x 3
+        voxel_embedds: B x 8 x 2
+        '''
+        # source: https://en.wikipedia.org/wiki/Trilinear_interpolation
+        weights = (x - voxel_min_vertex)/(voxel_max_vertex-voxel_min_vertex) # B x 3
+
+        # step 1
+        # 0->000, 1->001, 2->010, 3->011, 4->100, 5->101, 6->110, 7->111
+        c00 = voxel_embedds[:,0]*(1-weights[:,0][:,None]) + voxel_embedds[:,4]*weights[:,0][:,None]
+        c01 = voxel_embedds[:,1]*(1-weights[:,0][:,None]) + voxel_embedds[:,5]*weights[:,0][:,None]
+        c10 = voxel_embedds[:,2]*(1-weights[:,0][:,None]) + voxel_embedds[:,6]*weights[:,0][:,None]
+        c11 = voxel_embedds[:,3]*(1-weights[:,0][:,None]) + voxel_embedds[:,7]*weights[:,0][:,None]
+
+        # step 2
+        c0 = c00*(1-weights[:,1][:,None]) + c10*weights[:,1][:,None]
+        c1 = c01*(1-weights[:,1][:,None]) + c11*weights[:,1][:,None]
+
+        # step 3
+        c = c0*(1-weights[:,2][:,None]) + c1*weights[:,2][:,None]
+
+        return c
+
+    def forward(self, x):
+        # x is 3D point position: B x 3
+        x_embedded_all = []
+        for i in range(self.n_levels):
+            resolution = torch.floor(self.base_resolution * self.b**i)
+            voxel_min_vertex, voxel_max_vertex, hashed_voxel_indices, keep_mask = get_voxel_vertices(\
+                                                x, self.bounding_box, \
+                                                resolution, self.log2_hashmap_size)
+            
+            voxel_embedds = self.embeddings[i](hashed_voxel_indices)
+
+            x_embedded = self.trilinear_interp(x, voxel_min_vertex, voxel_max_vertex, voxel_embedds)
+            x_embedded_all.append(x_embedded)
+
+        keep_mask = keep_mask.sum(dim=-1)==keep_mask.shape[-1]
+        return torch.cat(x_embedded_all, dim=-1), keep_mask
+
+
 
 def get_encoding(n_input_dims, config):
     # input suppose to be range [0, 1]
@@ -86,10 +181,13 @@ def get_encoding(n_input_dims, config):
         encoding = VanillaFrequency(n_input_dims, config_to_primitive(config))
     elif config.otype == 'ProgressiveBandHashGrid':
         encoding = ProgressiveBandHashGrid(n_input_dims, config_to_primitive(config))
-    else:
+    elif config.otype == 'HashGrid':
         with torch.cuda.device(get_rank()):
             encoding = tcnn.Encoding(n_input_dims, config_to_primitive(config))
+    elif config.otype == 'Experimental':
+        encoding = Experimental(n_input_dims, config_to_primitive(config))
     encoding = CompositeEncoding(encoding, include_xyz=config.get('include_xyz', False), xyz_scale=2., xyz_offset=-1.)
+    
     return encoding
 
 

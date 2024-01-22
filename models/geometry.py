@@ -224,12 +224,16 @@ class VolumeSDF(BaseImplicitGeometry):
                 self._finite_difference_eps = self.finite_difference_eps
             elif self.finite_difference_eps == 'progressive':
                 hg_conf = self.config.xyz_encoding_config
-                assert hg_conf.otype == "ProgressiveBandHashGrid", "finite_difference_eps='progressive' only works with ProgressiveBandHashGrid"
+                assert hg_conf.otype == "ProgressiveBandHashGrid" or hg_conf.otype == "Experimental", "finite_difference_eps='progressive' only works with ProgressiveBandHashGrid"
                 current_level = min(
                     hg_conf.start_level + max(global_step - hg_conf.start_step, 0) // hg_conf.update_steps,
                     hg_conf.n_levels
                 )
-                grid_res = hg_conf.base_resolution * hg_conf.per_level_scale**(current_level - 1)
+                if hg_conf.otype == "ProgressiveBandHashGrid":
+                    grid_res = hg_conf.base_resolution * hg_conf.per_level_scale**(current_level - 1)
+                else:
+                    grid_res = hg_conf.base_resolution * self.encoding.encoding.encoding.b**(current_level - 1)
+
                 grid_size = 2 * self.config.radius / grid_res
                 if grid_size != self._finite_difference_eps:
                     rank_zero_info(f"Update finite_difference_eps to {grid_size}")

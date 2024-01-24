@@ -181,7 +181,7 @@ def get_encoding(n_input_dims, config):
         encoding = VanillaFrequency(n_input_dims, config_to_primitive(config))
     elif config.otype == 'ProgressiveBandHashGrid':
         encoding = ProgressiveBandHashGrid(n_input_dims, config_to_primitive(config))
-    elif config.otype == 'HashGrid':
+    elif config.otype == 'HashGrid' or config.otype == 'SphericalHarmonics':
         with torch.cuda.device(get_rank()):
             encoding = tcnn.Encoding(n_input_dims, config_to_primitive(config))
     elif config.otype == 'Experimental':

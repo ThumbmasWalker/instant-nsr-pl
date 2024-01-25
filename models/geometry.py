@@ -122,12 +122,14 @@ class VolumeDensity(BaseImplicitGeometry):
     def forward(self, points):
         points = contract_to_unisphere(points, self.radius, self.contraction_type)
         out = self.encoding_with_network(points.view(-1, self.n_input_dims)).view(*points.shape[:-1], self.n_output_dims).float()
-        density, feature = out[...,0], out
         if 'density_activation' in self.config:
+            density, feature = out[...,0], out
             density = get_activation(self.config.density_activation)(density + float(self.config.density_bias))
-        if 'feature_activation' in self.config:
-            feature = get_activation(self.config.feature_activation)(feature)
-        return density, feature
+            if 'feature_activation' in self.config:
+                feature = get_activation(self.config.feature_activation)(feature)
+            return density, feature
+        else:
+          return out
 
     def forward_level(self, points):
         points = contract_to_unisphere(points, self.radius, self.contraction_type)
@@ -224,15 +226,148 @@ class VolumeSDF(BaseImplicitGeometry):
                 self._finite_difference_eps = self.finite_difference_eps
             elif self.finite_difference_eps == 'progressive':
                 hg_conf = self.config.xyz_encoding_config
-                assert hg_conf.otype == "ProgressiveBandHashGrid" or hg_conf.otype == "Experimental", "finite_difference_eps='progressive' only works with ProgressiveBandHashGrid"
+                assert hg_conf.otype == "ProgressiveBandHashGrid" or hg_conf.otype == "PyHashGrid" or hg_conf.otype == "SpatiallyAdaptiveHash", "finite_difference_eps='progressive' only works with ProgressiveBandHashGrid"
                 current_level = min(
                     hg_conf.start_level + max(global_step - hg_conf.start_step, 0) // hg_conf.update_steps,
                     hg_conf.n_levels
                 )
-                if hg_conf.otype == "ProgressiveBandHashGrid":
+                if hg_conf.otype == "ProgressiveBandHashGrid" or hg_conf.otype == "SpatiallyAdaptiveHash":
                     grid_res = hg_conf.base_resolution * hg_conf.per_level_scale**(current_level - 1)
-                else:
+                elif hg_conf.otype == "PyHashGrid":
                     grid_res = hg_conf.base_resolution * self.encoding.encoding.encoding.b**(current_level - 1)
+                
+
+                grid_size = 2 * self.config.radius / grid_res
+                if grid_size != self._finite_difference_eps:
+                    rank_zero_info(f"Update finite_difference_eps to {grid_size}")
+                self._finite_difference_eps = grid_size
+            else:
+                raise ValueError(f"Unknown finite_difference_eps={self.finite_difference_eps}")
+
+@models.register('adaptive-volume-sdf')
+class AdaptiveVolumeSDF(BaseImplicitGeometry):
+    def setup(self):
+        self.n_output_dims = self.config.feature_dim
+
+        self.spatialfilter = models.make(self.config.spatial_filter_config.name, self.config.spatial_filter_config)
+        self.spatialfilter.contraction_type = ContractionType.AABB
+
+        encoding = get_encoding(3, self.config.xyz_encoding_config)
+        network = get_mlp(encoding.n_output_dims, self.n_output_dims, self.config.mlp_network_config)
+        self.encoding, self.network = encoding, network
+        self.grad_type = self.config.grad_type
+        self.finite_difference_eps = self.config.get('finite_difference_eps', 1e-3)
+        # the actual value used in training
+        # will update at certain steps if finite_difference_eps="progressive"
+        self._finite_difference_eps = None
+        if self.grad_type == 'finite_difference':
+            rank_zero_info(f"Using finite difference to compute gradients with eps={self.finite_difference_eps}")
+
+    def forward(self, points, with_grad=True, with_feature=True, with_laplace=False, with_spatial_mask=False):
+        with torch.inference_mode(torch.is_inference_mode_enabled() and not (with_grad and self.grad_type == 'analytic')):
+            with torch.set_grad_enabled(self.training or (with_grad and self.grad_type == 'analytic')):
+                if with_grad and self.grad_type == 'analytic':
+                    if not self.training:
+                        points = points.clone() # points may be in inference mode, get a copy to enable grad
+                    points.requires_grad_(True)
+
+                points_ = points # points in the original scale
+                points = contract_to_unisphere(points, self.radius, self.contraction_type) # points normalized to (0, 1)
+                
+                xyz, encodings = self.encoding(points.view(-1, 3))
+
+                spatial_mask = self.spatialfilter(points.view(-1, 3))
+
+                print(spatial_mask.shape, encodings.shape)
+
+                encodings = spatial_mask*encodings
+
+                encodings = torch.cat([xyz, encodings], dim=-1)
+
+                out = self.network(encodings).view(*points.shape[:-1], self.n_output_dims).float()
+                
+                sdf, feature = out[...,0], out
+                if 'sdf_activation' in self.config:
+                    sdf = get_activation(self.config.sdf_activation)(sdf + float(self.config.sdf_bias))
+                if 'feature_activation' in self.config:
+                    feature = get_activation(self.config.feature_activation)(feature)
+                if with_grad:
+                    if self.grad_type == 'analytic':
+                        grad = torch.autograd.grad(
+                            sdf, points_, grad_outputs=torch.ones_like(sdf),
+                            create_graph=True, retain_graph=True, only_inputs=True
+                        )[0]
+                    elif self.grad_type == 'finite_difference':
+                        eps = self._finite_difference_eps
+                        offsets = torch.as_tensor(
+                            [
+                                [eps, 0.0, 0.0],
+                                [-eps, 0.0, 0.0],
+                                [0.0, eps, 0.0],
+                                [0.0, -eps, 0.0],
+                                [0.0, 0.0, eps],
+                                [0.0, 0.0, -eps],
+                            ]
+                        ).to(points_)
+                        points_d_ = (points_[...,None,:] + offsets).clamp(-self.radius, self.radius)
+                        points_d = scale_anything(points_d_, (-self.radius, self.radius), (0, 1))
+
+
+                        encodings, xyz = self.encoding(points_d.view(-1, 3))
+
+                        spatial_mask = self.spatialfilter(points_d.view(-1, 3))
+
+                        encodings = spatial_mask*encodings
+
+                        encodings = torch.cat([xyz, encodings], dim=-1)
+
+
+                        points_d_sdf = self.network(encodings)[...,0].view(*points.shape[:-1], 6).float()
+                        grad = 0.5 * (points_d_sdf[..., 0::2] - points_d_sdf[..., 1::2]) / eps  
+
+                        if with_laplace:
+                            laplace = (points_d_sdf[..., 0::2] + points_d_sdf[..., 1::2] - 2 * sdf[..., None]).sum(-1) / (eps ** 2)
+
+        rv = [sdf]
+        if with_grad:
+            rv.append(grad)
+        if with_feature:
+            rv.append(feature)
+        if with_laplace:
+            assert self.config.grad_type == 'finite_difference', "Laplace computation is only supported with grad_type='finite_difference'"
+            rv.append(laplace)
+
+        if with_spatial_mask:
+          rv.append(spatial_mask)
+
+        rv = [v if self.training else v.detach() for v in rv]
+        return rv[0] if len(rv) == 1 else rv
+
+    def forward_level(self, points):
+        points = contract_to_unisphere(points, self.radius, self.contraction_type) # points normalized to (0, 1)
+        sdf = self.network(self.encoding(points.view(-1, 3))).view(*points.shape[:-1], self.n_output_dims)[...,0]
+        if 'sdf_activation' in self.config:
+            sdf = get_activation(self.config.sdf_activation)(sdf + float(self.config.sdf_bias))
+        return sdf
+
+    def update_step(self, epoch, global_step):
+        update_module_step(self.encoding, epoch, global_step)    
+        update_module_step(self.network, epoch, global_step)  
+        if self.grad_type == 'finite_difference':
+            if isinstance(self.finite_difference_eps, float):
+                self._finite_difference_eps = self.finite_difference_eps
+            elif self.finite_difference_eps == 'progressive':
+                hg_conf = self.config.xyz_encoding_config
+                assert hg_conf.otype == "ProgressiveBandHashGrid" or hg_conf.otype == "PyHashGrid" or hg_conf.otype == "SpatiallyAdaptiveHash", "finite_difference_eps='progressive' only works with ProgressiveBandHashGrid"
+                current_level = min(
+                    hg_conf.start_level + max(global_step - hg_conf.start_step, 0) // hg_conf.update_steps,
+                    hg_conf.n_levels
+                )
+                if hg_conf.otype == "ProgressiveBandHashGrid" or hg_conf.otype == "SpatiallyAdaptiveHash":
+                    grid_res = hg_conf.base_resolution * hg_conf.per_level_scale**(current_level - 1)
+                elif hg_conf.otype == "PyHashGrid":
+                    grid_res = hg_conf.base_resolution * self.encoding.encoding.encoding.b**(current_level - 1)
+                
 
                 grid_size = 2 * self.config.radius / grid_res
                 if grid_size != self._finite_difference_eps:

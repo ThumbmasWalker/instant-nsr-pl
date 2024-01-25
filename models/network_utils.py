@@ -11,6 +11,8 @@ from utils.misc import config_to_primitive, get_rank
 from models.utils import get_activation, get_voxel_vertices
 from systems.utils import update_module_step
 from spectraltools.core import spectral_linear
+from nerfacc import ContractionType
+import models
 
 class VanillaFrequency(nn.Module):
     def __init__(self, in_channels, config):
@@ -36,7 +38,6 @@ class VanillaFrequency(nn.Module):
         else:
             self.mask = (1. - torch.cos(math.pi * (global_step / self.n_masking_step * self.N_freqs - torch.arange(0, self.N_freqs)).clamp(0, 1))) / 2.
             rank_zero_debug(f'Update mask: {global_step}/{self.n_masking_step} {self.mask}')
-
 
 class ProgressiveBandHashGrid(nn.Module):
     def __init__(self, in_channels, config):
@@ -65,21 +66,24 @@ class ProgressiveBandHashGrid(nn.Module):
         self.current_level = current_level
         self.mask[:self.current_level * self.n_features_per_level] = 1.
 
-
 class CompositeEncoding(nn.Module):
-    def __init__(self, encoding, include_xyz=False, xyz_scale=1., xyz_offset=0.):
+    def __init__(self, encoding, include_xyz=False, adaptive=False, xyz_scale=1., xyz_offset=0.):
         super(CompositeEncoding, self).__init__()
         self.encoding = encoding
+        self.adaptive = adaptive
         self.include_xyz, self.xyz_scale, self.xyz_offset = include_xyz, xyz_scale, xyz_offset
         self.n_output_dims = int(self.include_xyz) * self.encoding.n_input_dims + self.encoding.n_output_dims
     
     def forward(self, x, *args):
-        return self.encoding(x, *args) if not self.include_xyz else torch.cat([x * self.xyz_scale + self.xyz_offset, self.encoding(x, *args)], dim=-1)
+        if self.adaptive == False:
+          return self.encoding(x, *args) if not self.include_xyz else torch.cat([x * self.xyz_scale + self.xyz_offset, self.encoding(x, *args)], dim=-1)
+        elif self.adaptive == True:
+          return x * self.xyz_scale + self.xyz_offset, self.encoding(x, *args)
 
     def update_step(self, epoch, global_step):
         update_module_step(self.encoding, epoch, global_step)
 
-class Experimental(nn.Module):
+class PyHashGrid(nn.Module):
     def __init__(self, in_channels, config):
         super().__init__()
         self.n_input_dims = in_channels
@@ -173,7 +177,42 @@ class HashEmbedder(nn.Module):
         keep_mask = keep_mask.sum(dim=-1)==keep_mask.shape[-1]
         return torch.cat(x_embedded_all, dim=-1), keep_mask
 
+class SpatiallyAdaptiveHash(nn.Module):
+    def __init__(self, in_channels, config):
+        super().__init__()
+        self.n_input_dims = in_channels
+        self.spatialfilter = models.make(config.spatial_filter_config.name, config.spatial_filter_config)
+        self.spatialfilter.contraction_type = ContractionType.AABB
 
+        config = config_to_primitive(config)
+        encoding_config = config.copy()
+        encoding_config['otype'] = 'HashGrid'
+        with torch.cuda.device(get_rank()):
+            self.encoding = tcnn.Encoding(in_channels, encoding_config)
+        
+        self.n_output_dims = self.encoding.n_output_dims
+        self.n_level = config['n_levels']
+        self.n_features_per_level = config['n_features_per_level']
+        self.start_level, self.start_step, self.update_steps = config['start_level'], config['start_step'], config['update_steps']
+        self.current_level = self.start_level
+        self.mask = torch.zeros(self.n_level * self.n_features_per_level, dtype=torch.float32, device=get_rank())
+
+    def forward(self, x):
+        enc = self.encoding(x)
+        a, b = self.spatialfilter(x)
+        a = a.unsqueeze(dim=1)
+        spatial_mask = torch.cat([a,b], dim=-1)
+        #currently just has a per dim mask over features, not masking the freqency levels. TODO
+        enc = spatial_mask*enc
+        enc = enc * self.mask
+        return enc
+
+    def update_step(self, epoch, global_step):
+        current_level = min(self.start_level + max(global_step - self.start_step, 0) // self.update_steps, self.n_level)
+        if current_level > self.current_level:
+            rank_zero_info(f'Update grid level to {current_level}')
+        self.current_level = current_level
+        self.mask[:self.current_level * self.n_features_per_level] = 1.
 
 def get_encoding(n_input_dims, config):
     # input suppose to be range [0, 1]
@@ -184,9 +223,12 @@ def get_encoding(n_input_dims, config):
     elif config.otype == 'HashGrid' or config.otype == 'SphericalHarmonics':
         with torch.cuda.device(get_rank()):
             encoding = tcnn.Encoding(n_input_dims, config_to_primitive(config))
-    elif config.otype == 'Experimental':
-        encoding = Experimental(n_input_dims, config_to_primitive(config))
-    encoding = CompositeEncoding(encoding, include_xyz=config.get('include_xyz', False), xyz_scale=2., xyz_offset=-1.)
+    elif config.otype == 'PyHashGrid':
+        encoding = PyHashGrid(n_input_dims, config_to_primitive(config))
+    elif config.otype == 'SpatiallyAdaptiveHash':
+        encoding = SpatiallyAdaptiveHash(n_input_dims, config)
+
+    encoding = CompositeEncoding(encoding, include_xyz=config.get('include_xyz', False), adaptive=config.get('adaptive', False), xyz_scale=2., xyz_offset=-1.)
     
     return encoding
 
@@ -279,7 +321,6 @@ def get_mlp(n_input_dims, n_output_dims, config):
         print(network)
     elif config.otype == 'VanillaMLP':
         network = VanillaMLP(n_input_dims, n_output_dims, config_to_primitive(config))
-
     else:
         with torch.cuda.device(get_rank()):
             network = tcnn.Network(n_input_dims, n_output_dims, config_to_primitive(config))

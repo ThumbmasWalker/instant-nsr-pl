@@ -257,6 +257,7 @@ class AdaptiveVolumeSDF(BaseImplicitGeometry):
         self.encoding, self.network = encoding, network
         self.grad_type = self.config.grad_type
         self.finite_difference_eps = self.config.get('finite_difference_eps', 1e-3)
+        
         # the actual value used in training
         # will update at certain steps if finite_difference_eps="progressive"
         self._finite_difference_eps = None
@@ -277,8 +278,6 @@ class AdaptiveVolumeSDF(BaseImplicitGeometry):
                 xyz, encodings = self.encoding(points.view(-1, 3))
 
                 spatial_mask = self.spatialfilter(points.view(-1, 3))
-
-                print(spatial_mask.shape, encodings.shape)
 
                 encodings = spatial_mask*encodings
 
@@ -313,7 +312,7 @@ class AdaptiveVolumeSDF(BaseImplicitGeometry):
                         points_d = scale_anything(points_d_, (-self.radius, self.radius), (0, 1))
 
 
-                        encodings, xyz = self.encoding(points_d.view(-1, 3))
+                        xyz, encodings = self.encoding(points_d.view(-1, 3))
 
                         spatial_mask = self.spatialfilter(points_d.view(-1, 3))
 
@@ -345,7 +344,13 @@ class AdaptiveVolumeSDF(BaseImplicitGeometry):
 
     def forward_level(self, points):
         points = contract_to_unisphere(points, self.radius, self.contraction_type) # points normalized to (0, 1)
-        sdf = self.network(self.encoding(points.view(-1, 3))).view(*points.shape[:-1], self.n_output_dims)[...,0]
+        
+        xyz, encodings = self.encoding(points.view(-1, 3))
+        spatial_mask = self.spatialfilter(points.view(-1, 3))
+        encodings = spatial_mask*encodings
+        encodings = torch.cat([xyz, encodings], dim=-1)
+
+        sdf = self.network(encodings).view(*points.shape[:-1], self.n_output_dims)[...,0]
         if 'sdf_activation' in self.config:
             sdf = get_activation(self.config.sdf_activation)(sdf + float(self.config.sdf_bias))
         return sdf

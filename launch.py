@@ -112,8 +112,8 @@ def main():
             trainer.fit(system, datamodule=dm, ckpt_path=args.resume)
         else:
             trainer.fit(system, datamodule=dm)
-            system.prune()
-            trainer.save_checkpoint("pruned.ckpt")
+            #system.prune()
+            #trainer.save_checkpoint("pruned.ckpt")
         trainer.test(system, datamodule=dm)
     elif args.validate:
         trainer.validate(system, datamodule=dm, ckpt_path=args.resume)

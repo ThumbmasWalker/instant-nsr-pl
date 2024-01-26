@@ -122,6 +122,13 @@ class NeuSSystem(BaseSystem):
         self.log('train/loss_sparsity', loss_sparsity)
         loss += loss_sparsity * self.C(self.config.system.loss.lambda_sparsity)
 
+        if self.C(self.config.system.loss.lambda_L1_frequency) > 0:
+            assert 'spatial_mask' in out, "Need geometry.name == adaptive-volume-sdf to regularize spatially-adaptive-encoding"
+            l1_norms = torch.sum(torch.abs(out['spatial_mask']), dim=1)
+            loss_frequency = l1_norms.mean()
+            self.log('train/loss_frequency', loss_frequency)
+            loss += loss_frequency * self.C(self.config.system.loss.lambda_L1_frequency)
+
         if self.C(self.config.system.loss.lambda_curvature) > 0:
             assert 'sdf_laplace_samples' in out, "Need geometry.grad_type='finite_difference' to get SDF Laplace samples"
             loss_curvature = out['sdf_laplace_samples'].abs().mean()

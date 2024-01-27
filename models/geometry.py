@@ -314,9 +314,9 @@ class AdaptiveVolumeSDF(BaseImplicitGeometry):
 
                         xyz, encodings = self.encoding(points_d.view(-1, 3))
 
-                        spatial_mask = self.spatialfilter(points_d.view(-1, 3))
+                        spatial_mask_d = self.spatialfilter(points_d.view(-1, 3))
 
-                        encodings = spatial_mask*encodings
+                        encodings = spatial_mask_d*encodings
 
                         encodings = torch.cat([xyz, encodings], dim=-1)
 

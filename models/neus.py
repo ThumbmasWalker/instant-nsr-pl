@@ -540,8 +540,6 @@ class NeuSModel(BaseModel):
             else:
               sdf, sdf_grad, feature = self.geometry(positions, with_grad=True, with_feature=True)
         
-
-        
         normal = F.normalize(sdf_grad, p=2, dim=-1)
         alpha = self.get_alpha(sdf, normal, t_dirs, dists)[...,None]
         rgb = self.texture(feature, t_dirs, normal)
@@ -553,12 +551,16 @@ class NeuSModel(BaseModel):
 
         comp_normal = accumulate_along_rays(weights, ray_indices, values=normal, n_rays=n_rays)
         comp_normal = F.normalize(comp_normal, p=2, dim=-1)
+        
+        comp_spatial = accumulate_along_rays(weights, ray_indices, values=spatial_mask, n_rays=n_rays)
+
 
         out = {
             'comp_rgb': comp_rgb,
             'comp_normal': comp_normal,
             'opacity': opacity,
             'depth': depth,
+            'spatial_mask': comp_spatial,
             'rays_valid': opacity > 0,
             'num_samples': torch.as_tensor([len(t_starts)], dtype=torch.int32, device=rays.device)
         }

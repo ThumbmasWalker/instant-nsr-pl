@@ -1,3 +1,4 @@
+from re import M
 import sys
 import warnings
 from bisect import bisect_right
@@ -302,18 +303,40 @@ def getattr_recursive(m, attr):
     return m
 
 
-def get_parameters(model, name):
+def get_parameters(model, name, config):
     module = getattr_recursive(model, name)
     if isinstance(module, nn.Module):
-        return module.parameters()
+        if name == 'geometry':
+          #try:
+            spatial_module = getattr_recursive(module, 'spatialfilter')
+            # Check if the module is a spatialfilter module
+            if isinstance(spatial_module, nn.Module):
+              # Separate learning rate for spatialfilter module
+              return [{'params': spatial_module.parameters(), 'name':'spatialfilter', 'lr': config['geometry']['spatialfilter']['lr']}, 
+                      {'params': module.network.parameters(), 'name':'geometry_network', 'lr': config['geometry']['lr']},
+                      {'params': module.encoding.parameters(), 'name':'geometry_encoding', 'lr': config['geometry']['lr']}]
+          #except:
+            #return module.parameters()
+        else:
+            # Use default learning rate for other modules
+            return module.parameters()
     elif isinstance(module, nn.Parameter):
         return module
     return []
 
 
+
 def parse_optimizer(config, model):
     if hasattr(config, 'params'):
-        params = [{'params': get_parameters(model, name), 'name': name, **args} for name, args in config.params.items()]
+        params_ = [{'params': get_parameters(model, name, config.params), 'name': name, 'lr': args['lr']} for name, args in config.params.items()]
+        params = []
+        for entry in params_:
+          if isinstance(entry['params'], list):
+            params.extend(entry['params'])
+          else:
+            params.append(entry)
+
+        # Resulting un-nested list
         rank_zero_debug('Specify optimizer params:', config.params)
     else:
         params = model.parameters()

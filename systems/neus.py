@@ -127,7 +127,7 @@ class NeuSSystem(BaseSystem):
             l1_norms = torch.sum(torch.abs(out['spatial_mask']), dim=1)
             loss_frequency = l1_norms.mean()
             self.log('train/loss_frequency', loss_frequency)
-            loss += loss_frequency * self.C(self.config.system.loss.lambda_L1_frequency)
+            loss += loss_frequency * self.C(self.config.system.loss.lambda_L1_frequency) * min(1, self.global_step/self.config.system.loss.frequency_loss_fade_end)
 
         if self.C(self.config.system.loss.lambda_curvature) > 0:
             assert 'sdf_laplace_samples' in out, "Need geometry.grad_type='finite_difference' to get SDF Laplace samples"
@@ -181,6 +181,12 @@ class NeuSSystem(BaseSystem):
         out = self(batch)
         psnr = self.criterions['psnr'](out['comp_rgb_full'].to(batch['rgb']), batch['rgb'])
         W, H = self.dataset.img_wh
+
+        lf_mask, indx = torch.max(out['spatial_mask'][:,0:2].view(H, W, 2), dim=-1)
+        mf1_mask, indx = torch.max(out['spatial_mask'][:,2:10].view(H, W, 8), dim=-1)
+        mf2_mask, indx = torch.max(out['spatial_mask'][:,10:17].view(H, W, 7), dim=-1)
+        hf_mask, indx = torch.max(out['spatial_mask'][:,-16:-1].view(H, W, 15), dim=-1)
+
         self.save_image_grid(f"it{self.global_step}-{batch['index'][0].item()}.png", [
             {'type': 'rgb', 'img': batch['rgb'].view(H, W, 3), 'kwargs': {'data_format': 'HWC'}},
             {'type': 'rgb', 'img': out['comp_rgb_full'].view(H, W, 3), 'kwargs': {'data_format': 'HWC'}}
@@ -190,7 +196,13 @@ class NeuSSystem(BaseSystem):
         ] if self.config.model.learned_background else []) + [
             {'type': 'grayscale', 'img': out['depth'].view(H, W), 'kwargs': {}},
             {'type': 'rgb', 'img': out['comp_normal'].view(H, W, 3), 'kwargs': {'data_format': 'HWC', 'data_range': (-1, 1)}}
-        ])
+        ] + ([
+            {'type': 'grayscale', 'img': lf_mask.view(H, W), 'kwargs': {}},
+            {'type': 'grayscale', 'img': mf1_mask.view(H, W), 'kwargs': {}},
+            {'type': 'grayscale', 'img': mf2_mask.view(H, W), 'kwargs': {}},
+            {'type': 'grayscale', 'img': hf_mask.view(H, W), 'kwargs': {}},
+        ] if self.config.model.geometry.xyz_encoding_config.adaptive else [])
+        )
 
         
         #self.export()
@@ -208,6 +220,8 @@ class NeuSSystem(BaseSystem):
     """
     
     def validation_epoch_end(self, out):
+        if self.global_step == 10000:
+          self.export()
         out = self.all_gather(out)
         if self.trainer.is_global_zero:
             out_set = {}
@@ -226,6 +240,12 @@ class NeuSSystem(BaseSystem):
         out = self(batch)
         psnr = self.criterions['psnr'](out['comp_rgb_full'].to(batch['rgb']), batch['rgb'])
         W, H = self.dataset.img_wh
+
+        lf_mask, indx = torch.max(out['spatial_mask'][:,0:2].view(H, W, 2), dim=-1)
+        mf1_mask, indx = torch.max(out['spatial_mask'][:,2:10].view(H, W, 8), dim=-1)
+        mf2_mask, indx = torch.max(out['spatial_mask'][:,10:17].view(H, W, 7), dim=-1)
+        hf_mask, indx = torch.max(out['spatial_mask'][:,-16:-1].view(H, W, 15), dim=-1)
+
         self.save_image_grid(f"it{self.global_step}-test/{batch['index'][0].item()}.png", [
             {'type': 'rgb', 'img': batch['rgb'].view(H, W, 3), 'kwargs': {'data_format': 'HWC'}},
             {'type': 'rgb', 'img': out['comp_rgb_full'].view(H, W, 3), 'kwargs': {'data_format': 'HWC'}}
@@ -235,7 +255,12 @@ class NeuSSystem(BaseSystem):
         ] if self.config.model.learned_background else []) + [
             {'type': 'grayscale', 'img': out['depth'].view(H, W), 'kwargs': {}},
             {'type': 'rgb', 'img': out['comp_normal'].view(H, W, 3), 'kwargs': {'data_format': 'HWC', 'data_range': (-1, 1)}}
-        ])
+        ] + ([
+            {'type': 'grayscale', 'img': lf_mask.view(H, W), 'kwargs': {}},
+            {'type': 'grayscale', 'img': mf1_mask.view(H, W), 'kwargs': {}},
+            {'type': 'grayscale', 'img': mf2_mask.view(H, W), 'kwargs': {}},
+            {'type': 'grayscale', 'img': hf_mask.view(H, W), 'kwargs': {}},
+        ] if self.config.model.geometry.xyz_encoding_config.adaptive else []))
         return {
             'psnr': psnr,
             'index': batch['index']

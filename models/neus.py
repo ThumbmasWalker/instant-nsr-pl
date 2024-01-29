@@ -536,7 +536,7 @@ class NeuSModel(BaseModel):
               sdf, sdf_grad, feature, sdf_laplace = self.geometry(positions, with_grad=True, with_feature=True, with_laplace=True)
         else:
             if self.config.geometry.name == 'adaptive-volume-sdf':
-              sdf, sdf_grad, feature, spatial_mask = self.geometry(positions, with_grad=True, with_feature=True, with_laplace=True, with_spatial_mask=True)
+              sdf, sdf_grad, feature, spatial_mask = self.geometry(positions, with_grad=True, with_feature=True, with_laplace=False, with_spatial_mask=True)
             else:
               sdf, sdf_grad, feature = self.geometry(positions, with_grad=True, with_feature=True)
         
@@ -552,15 +552,14 @@ class NeuSModel(BaseModel):
         comp_normal = accumulate_along_rays(weights, ray_indices, values=normal, n_rays=n_rays)
         comp_normal = F.normalize(comp_normal, p=2, dim=-1)
         
-        comp_spatial = accumulate_along_rays(weights, ray_indices, values=spatial_mask, n_rays=n_rays)
-
+        if self.config.geometry.name == 'adaptive-volume-sdf':
+          comp_spatial = accumulate_along_rays(weights, ray_indices, values=spatial_mask, n_rays=n_rays)
 
         out = {
             'comp_rgb': comp_rgb,
             'comp_normal': comp_normal,
             'opacity': opacity,
             'depth': depth,
-            'spatial_mask': comp_spatial,
             'rays_valid': opacity > 0,
             'num_samples': torch.as_tensor([len(t_starts)], dtype=torch.int32, device=rays.device)
         }
@@ -578,10 +577,11 @@ class NeuSModel(BaseModel):
                 out.update({
                     'sdf_laplace_samples': sdf_laplace
                 })
-            if self.config.geometry.name == 'adaptive-volume-sdf':
-                out.update({
-                    'spatial_mask': spatial_mask
-                })
+        
+        if self.config.geometry.name == 'adaptive-volume-sdf':
+            out.update({
+                'spatial_mask': spatial_mask
+            })
 
 
         if self.config.learned_background:

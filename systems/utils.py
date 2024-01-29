@@ -307,7 +307,7 @@ def get_parameters(model, name, config):
     module = getattr_recursive(model, name)
     if isinstance(module, nn.Module):
         if name == 'geometry':
-          #try:
+          try:
             spatial_module = getattr_recursive(module, 'spatialfilter')
             # Check if the module is a spatialfilter module
             if isinstance(spatial_module, nn.Module):
@@ -315,8 +315,8 @@ def get_parameters(model, name, config):
               return [{'params': spatial_module.parameters(), 'name':'spatialfilter', 'lr': config['geometry']['spatialfilter']['lr']}, 
                       {'params': module.network.parameters(), 'name':'geometry_network', 'lr': config['geometry']['lr']},
                       {'params': module.encoding.parameters(), 'name':'geometry_encoding', 'lr': config['geometry']['lr']}]
-          #except:
-            #return module.parameters()
+          except:
+            return module.parameters()
         else:
             # Use default learning rate for other modules
             return module.parameters()

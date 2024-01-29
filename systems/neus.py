@@ -182,10 +182,11 @@ class NeuSSystem(BaseSystem):
         psnr = self.criterions['psnr'](out['comp_rgb_full'].to(batch['rgb']), batch['rgb'])
         W, H = self.dataset.img_wh
 
-        lf_mask, indx = torch.max(out['spatial_mask'][:,0:2].view(H, W, 2), dim=-1)
-        mf1_mask, indx = torch.max(out['spatial_mask'][:,2:10].view(H, W, 8), dim=-1)
-        mf2_mask, indx = torch.max(out['spatial_mask'][:,10:17].view(H, W, 7), dim=-1)
-        hf_mask, indx = torch.max(out['spatial_mask'][:,-16:-1].view(H, W, 15), dim=-1)
+        if 'spatial_mask' in out.keys():
+          lf_mask, indx = torch.max(out['spatial_mask'][:,0:2].view(H, W, 2), dim=-1)
+          mf1_mask, indx = torch.max(out['spatial_mask'][:,2:10].view(H, W, 8), dim=-1)
+          mf2_mask, indx = torch.max(out['spatial_mask'][:,10:17].view(H, W, 7), dim=-1)
+          hf_mask, indx = torch.max(out['spatial_mask'][:,-16:-1].view(H, W, 15), dim=-1)
 
         self.save_image_grid(f"it{self.global_step}-{batch['index'][0].item()}.png", [
             {'type': 'rgb', 'img': batch['rgb'].view(H, W, 3), 'kwargs': {'data_format': 'HWC'}},
@@ -241,10 +242,11 @@ class NeuSSystem(BaseSystem):
         psnr = self.criterions['psnr'](out['comp_rgb_full'].to(batch['rgb']), batch['rgb'])
         W, H = self.dataset.img_wh
 
-        lf_mask, indx = torch.max(out['spatial_mask'][:,0:2].view(H, W, 2), dim=-1)
-        mf1_mask, indx = torch.max(out['spatial_mask'][:,2:10].view(H, W, 8), dim=-1)
-        mf2_mask, indx = torch.max(out['spatial_mask'][:,10:17].view(H, W, 7), dim=-1)
-        hf_mask, indx = torch.max(out['spatial_mask'][:,-16:-1].view(H, W, 15), dim=-1)
+        if 'spatial_mask' in out.keys():
+          lf_mask, indx = torch.max(out['spatial_mask'][:,0:2].view(H, W, 2), dim=-1)
+          mf1_mask, indx = torch.max(out['spatial_mask'][:,2:10].view(H, W, 8), dim=-1)
+          mf2_mask, indx = torch.max(out['spatial_mask'][:,10:17].view(H, W, 7), dim=-1)
+          hf_mask, indx = torch.max(out['spatial_mask'][:,-16:-1].view(H, W, 15), dim=-1)
 
         self.save_image_grid(f"it{self.global_step}-test/{batch['index'][0].item()}.png", [
             {'type': 'rgb', 'img': batch['rgb'].view(H, W, 3), 'kwargs': {'data_format': 'HWC'}},

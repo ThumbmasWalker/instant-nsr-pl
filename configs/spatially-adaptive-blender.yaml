@@ -1,16 +1,24 @@
-name: neuralangelo-dtu-wmask-dtu_scan37
-tag: ''
+name: neus-blender-${dataset.scene}
+tag: ""
 seed: 42
+
 dataset:
-  name: dtu
-  root_dir: ./load/DTU-neus/dtu_scan37
-  cameras_file: cameras_sphere.npz
-  img_downscale: 2
-  n_test_traj_steps: 60
-  apply_mask: true
+  name: blender
+  scene: ???
+  root_dir: ./load/nerf_synthetic/${dataset.scene}
+  img_wh:
+    - 800
+    - 800
+  # img_downscale: 1 # specify training image size by either img_wh or img_downscale
+  near_plane: 2.0
+  far_plane: 6.0
+  train_split: "train"
+  val_split: "val"
+  test_split: "test"
+
 model:
   name: neus
-  radius: 1.0
+  radius: 1.5
   num_samples_per_ray: 1024
   train_num_rays: 256
   max_train_num_rays: 8192
@@ -102,14 +110,14 @@ system:
     lambda_rgb_l1: 1.0
     lambda_mask: 0.1
     lambda_eikonal: 0.1
-    lambda_L1_frequency: 0.0006
+    lambda_L1_frequency: 0.0005
     lambda_curvature: 0.0
     lambda_sparsity: 0.0
     lambda_distortion: 0.0
     lambda_distortion_bg: 0.0
     lambda_opaque: 0.0
     sparsity_scale: 1.0
-    frequency_loss_fade_end : 10000
+    frequency_loss_fade_end : 5000
   optimizer:
     name: AdamW
     args:

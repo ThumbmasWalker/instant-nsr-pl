@@ -276,11 +276,8 @@ class AdaptiveVolumeSDF(BaseImplicitGeometry):
                 points = contract_to_unisphere(points, self.radius, self.contraction_type) # points normalized to (0, 1)
                 
                 xyz, encodings = self.encoding(points.view(-1, 3))
-
                 spatial_mask = self.spatialfilter(points.view(-1, 3))
-
                 encodings = spatial_mask*encodings
-
                 encodings = torch.cat([xyz, encodings], dim=-1)
 
                 out = self.network(encodings).view(*points.shape[:-1], self.n_output_dims).float()
@@ -311,15 +308,10 @@ class AdaptiveVolumeSDF(BaseImplicitGeometry):
                         points_d_ = (points_[...,None,:] + offsets).clamp(-self.radius, self.radius)
                         points_d = scale_anything(points_d_, (-self.radius, self.radius), (0, 1))
 
-
                         xyz, encodings = self.encoding(points_d.view(-1, 3))
-
                         spatial_mask_d = self.spatialfilter(points_d.view(-1, 3))
-
                         encodings = spatial_mask_d*encodings
-
                         encodings = torch.cat([xyz, encodings], dim=-1)
-
 
                         points_d_sdf = self.network(encodings)[...,0].view(*points.shape[:-1], 6).float()
                         grad = 0.5 * (points_d_sdf[..., 0::2] - points_d_sdf[..., 1::2]) / eps  

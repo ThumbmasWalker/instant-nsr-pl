@@ -1,9 +1,9 @@
-name: neuralangelo-dtu-wmask-dtu_scan37
+name: neuralangelo-dtu-wmask-dtu_scan69
 tag: ''
 seed: 42
 dataset:
   name: dtu
-  root_dir: ./load/DTU-neus/dtu_scan37
+  root_dir: ./load/DTU-neus/dtu_scan69
   cameras_file: cameras_sphere.npz
   img_downscale: 2
   n_test_traj_steps: 60
